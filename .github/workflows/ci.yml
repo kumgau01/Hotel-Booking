@@ -1,7 +1,6 @@
 
 name: Hotel Booking CI
 
-# When should this pipeline run?
 on:
   push:
     branches:
@@ -15,12 +14,26 @@ jobs:
     name: Build and Test
     runs-on: ubuntu-latest
 
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: rootpass
+          MYSQL_DATABASE: hotel_booking
+          MYSQL_USER: hoteluser
+          MYSQL_PASSWORD: hotelpass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -prootpass"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
     steps:
-      # Step 1: Download repository code
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # Step 2: Configure Java 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -28,6 +41,7 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # Step 3: Build and test the application
-      - name: Build with Maven
+      - name: Build and Test with Maven
         run: mvn -f hotel_booking/mvp_hotel_booking/mvp_hotel_booking/pom.xml clean verify
+        env:
+          SPRING_DATASOURCE_PASSWORD: hotelpass
