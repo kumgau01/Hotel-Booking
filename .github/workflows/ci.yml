@@ -65,6 +65,7 @@ jobs:
           tags: |
             grts2606/hotel-booking:latest
             grts2606/hotel-booking:${{ github.sha }}
+
   deploy:
     name: Deploy to Local Docker
     needs: build
@@ -75,43 +76,114 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Pull Docker image
-        working-directory: hotel_booking/mvp_hotel_booking/mvp_hotel_booking
-        env:
-          IMAGE_TAG: ${{ github.sha }}
-          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
-        run: docker compose pull app
-
-      - name: Deploy application
-        working-directory: hotel_booking/mvp_hotel_booking/mvp_hotel_booking
-        env:
-          IMAGE_TAG: ${{ github.sha }}
-          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
-          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
-        run: docker compose up -d --no-deps app
-
-      - name: Verify application health
+      - name: Capture previous image
+        id: previous
         shell: powershell
         run: |
-          $url = "http://localhost:8080/api/v1/hotels"
-          $maxAttempts = 12
+          $previousImage = docker inspect --format '{{.Config.Image}}' hotel-booking-app
 
-          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not identify the currently running application image."
+          }
+
+          $prefix = "grts2606/hotel-booking:"
+          if (-not $previousImage.StartsWith($prefix)) {
+              throw "Unexpected previous image: $previousImage"
+          }
+
+          $previousTag = $previousImage.Substring($prefix.Length)
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$previousTag"
+
+          Write-Host "Previous image tag: $previousTag"
+
+      - name: Deploy and verify new application
+        id: deployment
+        continue-on-error: true
+        working-directory: hotel_booking/mvp_hotel_booking/mvp_hotel_booking
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          docker compose pull app
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to pull the new Docker image."
+          }
+
+          docker compose up -d --no-deps app
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to start the new application."
+          }
+
+          $url = "http://localhost:8080/api/v1/hotels"
+
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
               try {
                   $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5
 
                   if ($response.StatusCode -eq 200) {
-                      Write-Host "Application is healthy. HTTP Status: $($response.StatusCode)"
+                      Write-Host "New application is healthy."
                       exit 0
                   }
               }
               catch {
-                  Write-Host "Attempt $attempt/$maxAttempts failed. Application is not ready yet."
+                  Write-Host "Health check attempt $attempt failed."
               }
 
               Start-Sleep -Seconds 10
           }
 
-          Write-Error "Application health check failed after $maxAttempts attempts."
+          throw "New application health check failed."
+
+      - name: Rollback to previous application
+        if: steps.deployment.outcome == 'failure'
+        working-directory: hotel_booking/mvp_hotel_booking/mvp_hotel_booking
+        env:
+          IMAGE_TAG: ${{ steps.previous.outputs.tag }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Rolling back to image tag: $env:IMAGE_TAG"
+
+          docker pull "grts2606/hotel-booking:$env:IMAGE_TAG"
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not pull the previous image."
+          }
+
+          docker compose up -d --no-deps app
+          if ($LASTEXITCODE -ne 0) {
+              throw "Could not restore the previous application."
+          }
+
+          $url = "http://localhost:8080/api/v1/hotels"
+
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
+              try {
+                  $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5
+
+                  if ($response.StatusCode -eq 200) {
+                      Write-Host "Rollback successful. Previous application is healthy."
+                      exit 0
+                  }
+              }
+              catch {
+                  Write-Host "Rollback health check attempt $attempt failed."
+              }
+
+              Start-Sleep -Seconds 10
+          }
+
+          throw "Rollback attempted, but previous application is not healthy."
+
+      - name: Mark deployment as failed
+        if: always() && steps.deployment.outcome == 'failure'
+        shell: powershell
+        run: |
+          Write-Error "New deployment failed. Rollback was attempted."
           exit 1
