@@ -90,3 +90,28 @@ jobs:
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
         run: docker compose up -d --no-deps app
+
+      - name: Verify application health
+        shell: powershell
+        run: |
+          $url = "http://localhost:8080/api/v1/hotels"
+          $maxAttempts = 12
+
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+              try {
+                  $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5
+
+                  if ($response.StatusCode -eq 200) {
+                      Write-Host "Application is healthy. HTTP Status: $($response.StatusCode)"
+                      exit 0
+                  }
+              }
+              catch {
+                  Write-Host "Attempt $attempt/$maxAttempts failed. Application is not ready yet."
+              }
+
+              Start-Sleep -Seconds 10
+          }
+
+          Write-Error "Application health check failed after $maxAttempts attempts."
+          exit 1
