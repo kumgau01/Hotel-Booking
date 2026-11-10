@@ -101,7 +101,7 @@ jobs:
         continue-on-error: true
         working-directory: hotel_booking/mvp_hotel_booking/mvp_hotel_booking
         env:
-          IMAGE_TAG: rollback-test-invalid
+          IMAGE_TAG: ${{ github.sha }}
           MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
         shell: powershell
