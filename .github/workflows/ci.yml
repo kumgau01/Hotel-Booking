@@ -65,3 +65,28 @@ jobs:
           tags: |
             grts2606/hotel-booking:latest
             grts2606/hotel-booking:${{ github.sha }}
+  deploy:
+    name: Deploy to Local Docker
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Windows, X64]
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Pull Docker image
+        working-directory: hotel_booking/mvp_hotel_booking/mvp_hotel_booking
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+        run: docker compose pull app
+
+      - name: Deploy application
+        working-directory: hotel_booking/mvp_hotel_booking/mvp_hotel_booking
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+        run: docker compose up -d --no-deps app
