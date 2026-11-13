@@ -187,3 +187,82 @@ jobs:
         run: |
           Write-Error "New deployment failed. Rollback was attempted."
           exit 1
+
+  deploy-kubernetes:
+    name: Deploy to Kubernetes
+    needs: [build, deploy]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+
+    steps:
+      - name: Verify Kubernetes access
+        shell: powershell
+        run: |
+          kubectl config current-context
+          if ($LASTEXITCODE -ne 0) {
+              throw "Cannot access Kubernetes context."
+          }
+
+          kubectl get nodes
+          if ($LASTEXITCODE -ne 0) {
+              throw "Cannot access Kubernetes cluster."
+          }
+
+      - name: Deploy new application image
+        id: k8s-deployment
+        continue-on-error: true
+        shell: powershell
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $image = "grts2606/hotel-booking:$env:IMAGE_TAG"
+
+          Write-Host "Deploying image: $image"
+
+          kubectl set image deployment/hotel-booking hotel-booking=$image -n hotel-booking
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Failed to update Kubernetes Deployment image."
+          }
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "updated=true"
+
+          kubectl rollout status deployment/hotel-booking -n hotel-booking --timeout=180s
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Kubernetes rollout failed."
+          }
+
+          Write-Host "Kubernetes deployment successful."
+
+      - name: Rollback Kubernetes deployment
+        if: steps.k8s-deployment.outcome == 'failure' && steps.k8s-deployment.outputs.updated == 'true'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Deployment failed. Rolling back..."
+
+          kubectl rollout undo deployment/hotel-booking -n hotel-booking
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Kubernetes rollback command failed."
+          }
+
+          kubectl rollout status deployment/hotel-booking -n hotel-booking --timeout=180s
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Rollback completed but previous deployment is not healthy."
+          }
+
+          Write-Host "Rollback successful."
+
+      - name: Mark Kubernetes deployment as failed
+        if: always() && steps.k8s-deployment.outcome == 'failure'
+        shell: powershell
+        run: |
+          Write-Error "Kubernetes deployment failed. Rollback was attempted."
+          exit 1
